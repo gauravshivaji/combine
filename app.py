@@ -79,9 +79,9 @@ TIMEFRAME_CONFIG = {
         "interval": "1h",
         "sma_windows": (20, 50),
         "support_window": 30,
-        "zz_pct": 0.005,   # 0.5%
+        "zz_pct": 0.005,
         "zz_min_bars": 6,
-        "horizon": 7,      # ~1 trading day on 1h chart
+        "horizon": 7,
         "buy_thr": 0.01,
         "sell_thr": -0.01,
         "min_rows": 250,
@@ -91,7 +91,7 @@ TIMEFRAME_CONFIG = {
         "interval": "1d",
         "sma_windows": (20, 50, 200),
         "support_window": 30,
-        "zz_pct": 0.05,    # 5%
+        "zz_pct": 0.05,
         "zz_min_bars": 5,
         "horizon": 60,
         "buy_thr": 0.03,
@@ -103,7 +103,7 @@ TIMEFRAME_CONFIG = {
         "interval": "1wk",
         "sma_windows": (20, 50, 200),
         "support_window": 30,
-        "zz_pct": 0.05,    # 5%
+        "zz_pct": 0.05,
         "zz_min_bars": 5,
         "horizon": 8,
         "buy_thr": 0.05,
@@ -420,16 +420,15 @@ def build_and_score_for_timeframe(timeframe_name, tickers):
         meta_list.append(pd.Series([t] * len(use), index=use.index, name="Ticker"))
 
     if not X_list:
-        return None, None
+        return None
 
     X = pd.concat(X_list, axis=0)
     y = pd.concat(y_list, axis=0)
 
     clf, acc, report = train_rf_classifier(X, y)
     if clf is None:
-        return None, None
+        return None
 
-    # Score latest snapshot for each ticker
     rows = []
     for t in stqdm(tickers, desc=f"Scoring ({timeframe_name})", total=len(tickers)):
         row = latest_feature_row_for_ticker(t, cfg, feature_cols)
@@ -495,12 +494,20 @@ if run_analysis:
     ml_results = {}
     metrics = {}
 
+    # 1️⃣ Build ML models and score per timeframe
     for tf in timeframes_selected:
         with st.spinner(f"Building ML model for {tf} timeframe..."):
-            ml_df, (acc, report) = build_and_score_for_timeframe(tf, selected_tickers)
-            if ml_df is None or ml_df.empty:
+            result = build_and_score_for_timeframe(tf, selected_tickers)
+            if result is None:
                 st.warning(f"No ML data for {tf} timeframe (maybe not enough history).")
                 continue
+
+            ml_df, metric_tuple = result
+            if ml_df is None or ml_df.empty or metric_tuple is None:
+                st.warning(f"No ML data for {tf} timeframe (maybe not enough history).")
+                continue
+
+            acc, report = metric_tuple
             ml_df["TradingView"] = ml_df["Ticker"].apply(tradingview_link)
             ml_results[tf] = ml_df
             metrics[tf] = (acc, report)
@@ -509,7 +516,7 @@ if run_analysis:
         st.error("No ML results available for the chosen settings.")
         st.stop()
 
-    # If only one timeframe: show that table directly
+    # 2️⃣ If only one timeframe selected → show simple table
     if len(ml_results) == 1:
         tf = list(ml_results.keys())[0]
         st.subheader(f"🤖 ML Signals — {tf} timeframe")
@@ -542,11 +549,11 @@ if run_analysis:
             file_name=f"ml_signals_{tf.lower()}.csv",
             mime="text/csv",
         )
+
+    # 3️⃣ Multi-timeframe consensus mode
     else:
-        # -------- MULTI-TIMEFRAME CONSENSUS --------
         st.subheader("🤝 Multi-Timeframe Consensus (common tickers)")
 
-        # 1️⃣ Debug: per-timeframe strong signals (BUY/SELL & prob >= cutoff)
         st.markdown("### 📊 Per-timeframe strong signals before consensus")
 
         strong_sets = {}
@@ -569,7 +576,7 @@ if run_analysis:
             st.warning("No strong signals in any timeframe.")
             st.stop()
 
-        # 2️⃣ Consensus tickers: intersection of strong sets
+        # Consensus tickers = intersection of strong sets
         if len(strong_sets) == 1:
             consensus_tickers = list(next(iter(strong_sets.values())))
         else:
@@ -579,7 +586,7 @@ if run_analysis:
             st.info(f"No tickers satisfy consensus BUY/SELL with ≥ {prob_cutoff*100:.0f}% probability in all selected timeframes.")
             st.stop()
 
-        # 3️⃣ Build final consensus table (average confidence across timeframes)
+        # Build final consensus table
         rows = []
         for ticker in consensus_tickers:
             row = {"Ticker": ticker}
@@ -605,16 +612,12 @@ if run_analysis:
                 row[f"Max_Prob_{tf}"] = max_bs
                 max_probs.append(max_bs)
 
-            # overall average confidence
             row["Avg_Max_Prob"] = np.mean(max_probs) if max_probs else np.nan
             rows.append(row)
 
         consensus_df = pd.DataFrame(rows)
-
-        # Sort by highest average confidence
         consensus_df = consensus_df.sort_values("Avg_Max_Prob", ascending=False)
 
-        # Add TradingView link
         consensus_df["TradingView"] = consensus_df["Ticker"].apply(tradingview_link)
 
         st.markdown("### ✅ Final consensus list")
@@ -643,4 +646,7 @@ if run_analysis:
             data=csv_df.to_csv(index=False).encode("utf-8"),
             file_name="ml_signals_consensus_multi_timeframe.csv",
             mime="text/csv",
-        )          
+        )
+
+st.markdown("---")
+st.markdown("⚠ Educational use only — not financial advice.")
