@@ -543,59 +543,82 @@ if run_analysis:
             mime="text/csv",
         )
 
-    else:
+        else:
         # -------- MULTI-TIMEFRAME CONSENSUS --------
         st.subheader("🤝 Multi-Timeframe Consensus (common tickers)")
 
-        # Find tickers common to all selected timeframes
-        ticker_sets = [set(df["Ticker"]) for df in ml_results.values()]
-        common_tickers = set.intersection(*ticker_sets)
-        if not common_tickers:
-            st.warning("No common tickers across all selected timeframes.")
+        # 1️⃣ Debug: per-timeframe strong signals (BUY/SELL & prob >= cutoff)
+        st.markdown("### 📊 Per-timeframe strong signals before consensus")
+
+        strong_sets = {}
+        for tf, df_tf in ml_results.items():
+            df_tf = df_tf.copy()
+            df_tf["Max_BuySell"] = df_tf[["Prob_Buy", "Prob_Sell"]].max(axis=1)
+            df_tf["Is_Strong"] = df_tf["ML_Pred"].isin(["BUY", "SELL"]) & (df_tf["Max_BuySell"] >= prob_cutoff)
+
+            strong_df = df_tf[df_tf["Is_Strong"]].copy()
+            strong_sets[tf] = set(strong_df["Ticker"])
+
+            st.write(f"**{tf}**: {len(strong_df)} stocks with BUY/SELL and prob ≥ {prob_cutoff*100:.0f}%")
+            if not strong_df.empty:
+                st.dataframe(
+                    strong_df[["Ticker", "ML_Pred", "Prob_Buy", "Prob_Sell", "Prob_Hold"]],
+                    use_container_width=True,
+                )
+
+        if not strong_sets:
+            st.warning("No strong signals in any timeframe.")
             st.stop()
 
+        # 2️⃣ Consensus tickers: intersection of strong sets
+        if len(strong_sets) == 1:
+            consensus_tickers = list(next(iter(strong_sets.values())))
+        else:
+            consensus_tickers = set.intersection(*strong_sets.values())
+
+        if not consensus_tickers:
+            st.info(f"No tickers satisfy consensus BUY/SELL with ≥ {prob_cutoff*100:.0f}% probability in all selected timeframes.")
+            st.stop()
+
+        # 3️⃣ Build final consensus table (average confidence across timeframes)
         rows = []
-        for ticker in common_tickers:
+        for ticker in consensus_tickers:
             row = {"Ticker": ticker}
-            keep_this = True
+            max_probs = []
 
             for tf in timeframes_selected:
                 df_tf = ml_results[tf]
                 r = df_tf[df_tf["Ticker"] == ticker]
                 if r.empty:
-                    keep_this = False
-                    break
-
+                    continue
                 r = r.iloc[0]
+
                 pred = r["ML_Pred"]
                 pb = r["Prob_Buy"]
                 ps = r["Prob_Sell"]
                 ph = r["Prob_Hold"]
-
                 max_bs = max(pb, ps)
-
-                # Condition: must be BUY or SELL and prob >= cutoff
-                if (pred not in ["BUY", "SELL"]) or (max_bs < prob_cutoff):
-                    keep_this = False
-                    break
 
                 row[f"Pred_{tf}"] = pred
                 row[f"Prob_Buy_{tf}"] = pb
                 row[f"Prob_Sell_{tf}"] = ps
                 row[f"Prob_Hold_{tf}"] = ph
+                row[f"Max_Prob_{tf}"] = max_bs
+                max_probs.append(max_bs)
 
-            if keep_this:
-                rows.append(row)
-
-        if not rows:
-            st.info(f"No tickers satisfy consensus BUY/SELL with ≥ {prob_cutoff*100:.0f}% probability in all selected timeframes.")
-            st.stop()
+            # overall average confidence
+            row["Avg_Max_Prob"] = np.mean(max_probs) if max_probs else np.nan
+            rows.append(row)
 
         consensus_df = pd.DataFrame(rows)
+
+        # Sort by highest average confidence
+        consensus_df = consensus_df.sort_values("Avg_Max_Prob", ascending=False)
 
         # Add TradingView link
         consensus_df["TradingView"] = consensus_df["Ticker"].apply(tradingview_link)
 
+        st.markdown("### ✅ Final consensus list")
         st.dataframe(
             consensus_df,
             use_container_width=True,
@@ -603,6 +626,9 @@ if run_analysis:
                 "TradingView": st.column_config.LinkColumn(
                     "TradingView",
                     display_text="📈 Chart"
+                ),
+                "Avg_Max_Prob": st.column_config.ProgressColumn(
+                    "Avg Max Prob (across TFs)", min_value=0.0, max_value=1.0
                 ),
                 **{
                     col: st.column_config.ProgressColumn(col, min_value=0.0, max_value=1.0)
@@ -619,6 +645,3 @@ if run_analysis:
             file_name="ml_signals_consensus_multi_timeframe.csv",
             mime="text/csv",
         )
-
-st.markdown("---")
-st.markdown("⚠ Educational use only — not financial advice.")
