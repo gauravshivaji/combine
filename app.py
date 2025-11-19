@@ -542,7 +542,7 @@ if run_analysis:
             file_name=f"ml_signals_{tf.lower()}.csv",
             mime="text/csv",
         )
-            else:
+    else:
         # -------- MULTI-TIMEFRAME CONSENSUS --------
         st.subheader("🤝 Multi-Timeframe Consensus (common tickers)")
 
@@ -643,9 +643,4 @@ if run_analysis:
             data=csv_df.to_csv(index=False).encode("utf-8"),
             file_name="ml_signals_consensus_multi_timeframe.csv",
             mime="text/csv",
-        )
-
-
-
-
-
+        )          
